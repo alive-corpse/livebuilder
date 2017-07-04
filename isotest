@@ -1,0 +1,3 @@
+#!/bin/sh
+[ -n "$1" ] && iso="$1" || iso=live-testing.iso
+qemu-system-x86_64 -enable-kvm -m 512 -cdrom "$iso"

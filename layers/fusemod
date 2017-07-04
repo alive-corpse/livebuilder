@@ -1,0 +1,3 @@
+#!/bin/sh
+
+sudo insmod /lib/live/mount/rootfs/filesystem.squashfs/lib/modules/3.16.0-4-amd64/kernel/fs/fuse/fuse.ko

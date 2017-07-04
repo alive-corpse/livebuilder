@@ -1,0 +1,32 @@
+#!/bin/sh
+
+if [ -n "$1" ]; then
+    if [ -f "$1" ]; then
+        fn="$1"
+        echo "$fn"
+        if [ -n `file $fn | awk '$2~/gzip/ {print $2}'` ]; then
+            echo "Found gzipped file, unpacking..."
+            cat "$fn" | gzip -d > "$1.unpacked"
+            fn="$fn.unpacked"
+        fi
+        echo "test: $fn"
+        if [ -n `file $1 | awk '$3~/^cpio$/ {print $3}'` ]; then
+            echo "Unpack cpio archive..."
+            mkdir initrd
+            cd initrd
+            cpio -ivd < "../$fn"
+            echo "Removing temporary file.."
+            rm "../$fn"
+        fi
+    elif [ -d "$1" ]; then
+        echo "Found directory"
+        cd "$1"
+        find ./ | cpio -H newc -o > ../new-initrd.cpio
+        cd ..
+        gzip new-initrd.cpio
+        [ -n "$2" ] && mv new-initrd.cpio.gz "$2" || mv new-initrd.cpio.gz initrd-`date +%F-%T.img`
+    fi
+else
+   echo "First parameter should be path to initrd" 
+fi
+

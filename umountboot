@@ -1,0 +1,8 @@
+#!/bin/sh
+
+[ `whoami` != "root" ] && echo "This script should be run with superuser permissions" && exit 1
+
+umount iso/boot/grub
+umount iso/files
+umount iso/live
+

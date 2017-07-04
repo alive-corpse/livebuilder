@@ -1,0 +1,8 @@
+#!/bin/sh
+
+[ `whoami` != "root" ] && echo "This script should be run with superuser permissions" && exit 1
+
+mount -o bind /lib/live/mount/medium/EFI/grub iso/boot/grub
+mount -o bind /lib/live/mount/medium/files iso/files
+mount -o bind /lib/live/mount/medium/live iso/live
+

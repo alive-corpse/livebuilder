@@ -1,0 +1,3 @@
+#!/bin/sh
+[ -n "$1" ] && PREF="$1" || PREF=overlay
+find "$PREF" | sed '/_HIDDEN~/!d;s/_HIDDEN~//;s/^.*\.unionfs\///'

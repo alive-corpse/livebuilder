@@ -1,0 +1,325 @@
+#!/bin/sh
+
+# Based on:
+
+#     Copyright (c) 2012-2013 cgraff , haylo
+#     LIVE BUILD SYNTAX AND PROGRAM FROM: Baumann, Armstrong and Lamb
+#     THIS IS FREE CODE AS LONG AS THESE COMMENTS ARE INCLUDED :-)
+
+# Error codes:
+# 1 - Can't install needed packages
+
+
+# BASIC LOW DOWN IS:
+# 1 format the partition,
+# 2 encrypt it with luks,
+# 3 open it with luks,
+# 4 make the filesystem,
+# 5 mount it from /dev/mapper/* ,
+# 6 populate the filesystem with a "persistence.conf" file,
+# 7 un mount it,
+# 8 close it with luks
+
+# DEFINE SOME VARIABLES
+# NOOBS TIP: the = sign assigns a value to a variable
+
+LOGLEVEL='info'
+
+mirror="http://deb.debian.org/debian/"
+security_mirror="http://security.debian.org/"
+directory='live'
+user="user"
+hostname="live"
+kernel="linux-image-4.11.0-1"
+
+release="stable"
+devicel="/dev/sdb" # CHOOSE A DEVICE
+usb_size="4gb" # TELL PARTED ITS SIZE
+
+
+LPREF='date +%Y.%m.%d-%H:%M:%S'
+
+# Set color function
+set_color() {
+    if [ -z "$LCOLOR" ]; then
+        [ -n "$(which tput)" ] && LCOLOR=1 || LCOLOR=0
+    fi
+}
+
+# DIV function 
+d() {
+    if [ -z "$LCOLOR" ]; then
+        [ -n "$(which tput)" ] && LCOLOR=1 || LCOLOR=0
+    fi
+    cnt=`echo "$(tput cols)/2" | bc`
+    for i in `seq 1 "$cnt"`; do
+        [ "$LCOLOR" = "1" ] && tput setaf 1
+        echo -n =
+        [ "$LCOLOR" = "1" ] && tput setaf 3
+        echo -n -
+    done
+    [ "$LCOLOR" = "1" ] && tput sgr0
+    echo
+}
+
+# Logging function
+l() {
+    [ -z "$LPREF" ] && LPREF='date +%Y.%m.%d-%H:%M:%S'
+    if [ -z "$LCOLOR" ]; then
+        [ -n "$(which tput)" ] && LCOLOR=1 || LCOLOR=0
+    fi
+    if [ -n "$2" ]; then
+        case "$1" in
+            d)
+                if [ "$LOGLEVEL" = "debug" ]; then
+                    [ "$LCOLOR" = "1" ] && tput setaf 5
+                    echo `$LPREF`" DEBUG:   $2"   
+                    [ "$LCOLOR" = "1" ] && tput sgr0
+                fi
+            ;;
+            i)
+                if [ "$LOGLEVEL" = "debug" ] || [ "$LOGLEVEL" = "info" ]; then
+                    [ "$LCOLOR" = "1" ] && tput setaf 2
+                    echo `$LPREF`" INFO:    $2"
+                    [ "$LCOLOR" = "1" ] && tput sgr0
+                fi
+            ;;
+            w)
+                if [ "$LOGLEVEL" = "debug" ] || [ "$LOGLEVEL" = "info" ] || [ "$LOGLEVEL" = "warning" ]; then
+                    [ "$LCOLOR" = "1" ] && tput setaf 3
+                    echo `$LPREF`" WARNING: $2"
+                    [ "$LCOLOR" = "1" ] && tput sgr0
+                fi
+            ;;
+            e)
+                [ "$LCOLOR" = "1" ] && tput setaf 1
+                echo `$LPREF`" ERROR:   $2"
+                [ "$LCOLOR" = "1" ] && tput sgr0
+            ;;
+            f)
+                [ "$LCOLOR" = "1" ] && tput setaf 1
+                echo `$LPREF`" FATAL:   $2"
+                [ "$LCOLOR" = "1" ] && tput sgr0
+            ;;
+            fe) 
+                [ "$LCOLOR" = "1" ] && tput setaf 1
+                echo `$LPREF`" FATAL:   $2"
+                [ "$LCOLOR" = "1" ] && tput setaf 2
+                echo `$LPREF`" INFO:    All next operations will be cancelled..."
+                [ "$LCOLOR" = "1" ] && tput sgr0
+                [ -n "$3" ] && exit $3 || exit 1 
+            ;;
+        esac
+    else
+        case "$1" in
+             fe) 
+                [ "$LCOLOR" = "1" ] && tput setaf 1
+                echo `$LPREF`" FATAL:   Not enough parameters."
+                [ "$LCOLOR" = "1" ] && tput setaf 2
+                echo `$LPREF`" INFO:    All next operations will be cancelled..."
+                [ "$LCOLOR" = "1" ] && tput sgr0
+                exit 1 
+            ;;
+        esac
+    fi
+}
+
+# Check for superuser privileges
+check_root() {
+    l d 'Check root priveleges...'
+    if [ `whoami` != "root" ]; then
+        l f "This script sould be run by root"
+        l i "Please, run it as: sudo $0"
+        exit 1
+    fi
+}
+
+# Simple wizard
+swiz() {
+    # First parameter - message
+    # Second parameter - command
+    # Third parameter - default value [y/n], by default - n
+    if ! ["$AUTO" ]; then
+        ch="-"
+        echo
+        while [ -z "$(echo "$ch" | sed 's/^$/n/' | egrep -i '^[yn]?$' )" ]; do
+            [ "$LCOLOR" = "1" ] && tput setaf 4
+            case "$3" in
+                y)
+                    defch="$3"
+                    read -p "$1 [Y/n]: " ch
+                ;;
+                n)
+                    defch="$3"
+                    read -p "$1 [y/N]: " ch
+                ;;
+                *)
+                    defch='n'
+                    read -p "$1 [y/N]: " ch
+                ;;
+            esac
+        done
+        [ -z "$ch" ] && ch="$defch"
+        case $ch in
+            Y|y)
+                $2
+                echo
+            ;;
+            N|n)
+                [ "$LCOLOR" = "1" ] && tput setaf 1
+                echo "Canceled..."
+                echo
+            ;;
+        esac
+    fi
+    [ "$LCOLOR" = "1" ] && tput sgr0
+}
+
+# Input wizard
+INPUT=""
+iwiz() {
+    # First parameter - message
+    # Second parameter - default value
+    INPUT=""
+    if ! ["$AUTO" ]; then
+        [ "$LCOLOR" = "1" ] && tput setaf 4
+        read -p "$1 [$2]: " inp
+    fi
+    [ "$LCOLOR" = "1" ] && tput sgr0
+    [ -n "$inp" ] && INPUT="$inp" || INPUT="$2"
+}
+
+inst_pkgs() {
+    l i 'Please, wait... Trying to install needed packages...'
+    if ! apt-get -y -f install live-build live-config live-config-doc cryptsetup; then
+        l fe "Can\'t install needed packages" 1
+    fi
+}
+
+pkg_list() {
+    [ -d "config/package-lists" ] || mkdir -p "config/package-lists"
+    l i "Creating minimal package list..."
+    printf "\
+    user-setup
+    sudo
+    cryptsetup
+    apt-utils
+    " > config/package-lists/package.list.chroot
+}
+
+pkg_list_ext() {
+    l i "Appending extended list of packages..."
+    printf "\
+    openssh-server
+    bash
+    sshfs
+    " >> config/package-lists/package.list.chroot
+}
+
+config() {
+    d
+    l i "Create configuration..."
+    iwiz "Enter directory for file saving" "$directory"
+    directory="$INPUT"
+    iwiz "Enter default username" "$user"
+    user="$INPUT"
+    iwiz "Enter hostname" "$hostname"
+    hostname="$INPUT"
+    iwiz "Enter release name" "$release"
+    release="$INPUT"
+    iwiz "Enter mirror" "$mirror"
+    mirror="$INPUT"
+    iwiz "Enter security mirror" "$security_mirror"
+    security_mirror="$INPUT"
+    iwiz "Enter kernel version" "$kernel"
+    kernel="$INPUT"
+    echo 
+    mkdir -p "$directory"
+    cd "$directory"
+    
+    pkg_list
+    swiz 'Do you want to install additional packages (xorg, xfce4, etc...)' pkg_list_ext
+    d
+
+    l i "Build configuration..."
+    lb config -a amd64 -b hdd -d "$release" --linux-flavours amd64 --bootstrap cdebootstrap --cdebootstrap-options --flavour=minimal --bootappend-live "boot=live config persistent=cryptsetup persistence-encryption=luks username=$user hostname=$hostname persistence" --apt-indices false --apt-recommends false --linux-packages "${kernel}" --mirror-bootstrap "${mirror}" --mirror-binary "${mirror}" --mirror-chroot-security "${security_mirror}" --mirror-binary-security "${security_mirror}" 
+}
+
+build_image() {
+    d
+    l i "Start build image..."
+
+    echo "deb "${mirror}" "$release" main contrib non-free" > \
+    config/archives/"$release".list.chroot
+
+    # ADD WHEEZY REPOS FOR ABOVE PIN LIST
+    #echo "deb "${mirror}" experimental main" > \
+    #config/archives/experimental.list.chroot
+
+    # BUILD THE IMAGE
+    lb build
+}
+
+
+trap "d" 0 1 2 5 15
+d
+l i "Live USB build wizard by Evgeniy Shumilov evgeniy.shumilov@gmail.com"
+d
+check_root
+set_color
+inst_pkgs
+config
+build_image
+
+exit 0
+
+
+
+# CHECK FOR BAD BLOCKS ON THE DEVICE
+sudo badblocks -c 10240 -s -w -t random -v "${devicel}"
+
+# OVERWRITE THE DEVICE WITH RANDOM DATA
+sudo dd if=/dev/urandom of="${devicel}"
+
+
+# DD THE binary.img to a usb
+sudo dd if=binary.img of="${devicel}"
+
+# THIS JUST TELLS PARTED WHERE TO START
+# TO MAKE THE SDB2 PARTITION
+read bytes _ < <(du -bcm binary.img |tail -1); echo $bytes
+
+# MAKE THE PARTITION,
+sudo parted "${devicel}" mkpart primary "${bytes}" "${usb_size}"
+
+
+# ENCRYPT THE PARTITION
+sudo cryptsetup --verbose --verify-passphrase luksFormat "${devicel}2"
+
+# OPEN THE ENCRYPTED PARTITION
+sudo cryptsetup luksOpen "${devicel}2" my_usb
+
+# MAKE A FILESYSTEM ON IT AND LABEL IT "persistence"
+sudo mkfs.ext3 -L persistence /dev/mapper/my_usb
+
+# MAKE A MOUNT POINT
+sudo mkdir -p /mnt/my_usb
+
+# MOUNT THE OPENED ENCYRYPTION PARTITION
+sudo mount /dev/mapper/my_usb /mnt/my_usb/
+
+# MAKE THE PERSISTENCE.CONF FILE
+echo "/ union" > ~/persistence.conf && sudo mv ~/persistence.conf \
+/persistence.conf && sudo mv /persistence.conf /mnt/my_usb
+
+# UMOUNT IT
+sudo umount /dev/mapper/my_usb
+
+# CLOSE THE LUKS PARTITION
+sudo cryptsetup luksClose /dev/mapper/my_usb
+
+# TEST IT
+sudo apt-get install qemu --force-yes
+
+sudo kvm "${devicel}"
+

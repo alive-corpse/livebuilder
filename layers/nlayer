@@ -1,0 +1,22 @@
+#!/bin/sh
+cd `dirname "$0"`
+cdir=`pwd`
+
+[ -z "$1" ] && echo "Example $0 mp1 mp2 mp3" && exit 1
+
+[ -d "overlay" ] || mkdir overlay
+[ -d "squashfs-root" ] || mkdir squashfs-root
+
+msrc="$cdir/overlay=RW"
+for mprev in $( echo $* | rev ); do
+    mp="$(echo "$mprev" | rev)"
+    if [ -d "$mp" ]; then
+        msrc="$msrc:$cdir/$mp=RO"
+    else
+        echo "ERROR: Directory $mp is not exists..."
+        exit 2
+    fi
+done
+
+echo "$msrc"
+unionfs-fuse -o cow,nodev,noatime,allow_other,use_ino,suid,dev,nonempty "$msrc" "$cdir/squashfs-root"

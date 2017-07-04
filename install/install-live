@@ -1,0 +1,124 @@
+#!/bin/sh
+
+MNT='/mnt/live-usb'
+MNTPERS='/mnt/live-pers'
+PREF=`dirname "$0"`
+
+[ `whoami` != "root" ] && echo "This script should be run under root!" && exit 1
+
+# Simple wizard
+swiz() {
+    # First parameter - message
+    # Second parameter - command
+    # Third parameter - cancel command 
+    ch="-"
+    echo "$DIV"
+    while [ -z "$(echo "$ch" | sed 's/^$/n/' | egrep -i '^[yn]$' )" ]; do
+        read -p "$1 [y/N]: " ch
+        echo
+    done
+    [ -z "$ch" ] && ch='n'
+    echo "$DIV"
+    case $ch in
+        Y|y)
+            $2
+            echo
+        ;;
+        N|n)
+            $3
+            echo "Canceled..."
+            echo
+        ;;
+    esac
+}
+
+if ! apt-get install parted grub-efi-ia32-bin grub-efi-amd64-bin grub-pc-bin grub2-common; then
+    echo
+    echo "Can't install needed packages. Check for apt base is updated."
+    echo
+    exit 1
+fi
+echo
+dev=''
+
+
+while [ -z `find /dev -name "$dev"` ]; do
+    read -p "Input device for install (for example: sdb): " dev
+done
+if ! parted /dev/"$dev" -- mktable gpt; then
+    exit 0
+fi
+if ! parted /dev/"$dev" -- mkpart biosgrub fat32 1MiB 4MiB; then
+    echo "Can't make biosgrub part"
+    exit 2
+fi
+parted /dev/"$dev" -- set 1 bios_grub on
+
+# Make boot partition
+bootend=''
+while [ -z "$(echo "$bootend" | egrep '^[0-9]+([TMG]B|%)$')" ]; do
+    read -p "Input end position of boot partition (examples: 700MB, 20GB, 1TB, 30%, etc): " bootend
+done
+if ! parted /dev/"$dev" -- mkpart efi fat32 4MiB "$bootend"; then
+    echo "Can't create boot partition"
+    exit 3
+fi
+parted /dev/"$dev" -- set 2 esp on
+sleep 1
+mkfs.vfat -F32 -n LIVE /dev/"$dev""2"
+
+[ -d "$MNT" ] || mkdir -p "$MNT"
+
+num=`awk '$2~/^\/$/ { print NR }' /etc/fstab`
+sed -i "$num"'s/^/#/' /etc/fstab
+
+mount /dev/"$dev""2" "$MNT"
+
+grub-install --removable --no-nvram --no-uefi-secure-boot  --efi-directory="$MNT" --boot-directory="$MNT/EFI" --target=i386-efi /dev/"$dev"
+grub-install --removable --no-nvram --no-uefi-secure-boot --efi-directory="$MNT" --boot-directory="$MNT/EFI" --target=x86_64-efi /dev/"$dev"
+grub-install --removable --boot-directory="$MNT/EFI" --target=i386-pc /dev/"$dev"
+
+sed -i "$num"'s/^#//' /etc/fstab
+
+cp "$PREF/grub.cfg" "$MNT/EFI/grub/"
+cp "$PREF/splash.png" "$MNT/EFI/grub/"
+cp -R "$PREF/files" "$MNT"
+cp /usr/lib/syslinux/memdisk "$MNT/files/images/other"
+
+if [ -d "disk" ]; then
+    echo
+    echo "Copying live files from current os"
+    cp -Rv disk/* "$MNT"
+fi
+sync
+read -p "Press enter to umount boot partition" t
+umount "$MNT"
+sleep 1
+rmdir "$MNT"
+
+# Make persistent partition
+PERS="$(swiz "Make persistent partition" 'echo 1' 'echo 0' | sed '/^$/d')"
+if [ "$PERS" = "1" ]; then
+    persend=''
+    while [ -z "$(echo "$persend" | egrep '^[0-9]+([TMG]B|%)$')" ]; do
+        read -p "Input end position of persistent partition (examples: 700MB, 20GB, 1TB, 30%, etc): " persend
+    done
+    if ! parted /dev/"$dev" -- mkpart efi fat32 "$bootend" "$persend"; then
+        echo "Can't create persistent partition"
+        exit 4
+    fi
+    [ -d "$MNTPERS" ] || mkdir -p "$MNTPERS"
+    cryptsetup luksFormat "/dev/$dev"3 
+    cryptsetup luksOpen "/dev/$dev"3 live-pers
+    mkfs.ext4 -L persistence /dev/mapper/live-pers
+    mount /dev/mapper/live-pers "$MNTPERS"
+    echo "/ union" > "$MNTPERS/persistence.conf"
+    sync
+    read -p "Press enter to umount persistence" t
+    umount "$MNTPERS"
+    rmdir "$MNTPERS"
+    cryptsetup luksClose live-pers
+fi
+
+
+

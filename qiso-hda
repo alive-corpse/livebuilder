@@ -1,0 +1,4 @@
+#!/bin/sh
+rm initrd-*.img; ./initext initrd
+
+[ -n "$1" ] && qemu-system-x86_64 -enable-kvm -cdrom live-testing.iso -m 512 -hda hda.qcow2 -kernel vmlinuz -initrd initrd-*.img -append "boot=live config apparmor=1 security=apparmor $1" || qemu-system-x86_64 -enable-kvm -cdrom live-testing.iso -m 512 -hda hda.qcow2 -kernel vmlinuz -initrd initrd-*.img -append "boot=live config apparmor=1 security=apparmor"

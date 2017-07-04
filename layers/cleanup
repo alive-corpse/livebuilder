@@ -1,0 +1,39 @@
+#!/bin/sh
+[ `whoami` != root ] && echo "This should be started with root grants!" && exit 1
+[ -z "$1" ] && S="./squashfs-root" || S="./$1"
+! [ -d "$S" ] && echo "Directory $S is not exists" && exit 1
+mount -o bind /dev "$S/dev" 
+mount -o bind /sys "$S/sys" 
+mount -o bind /proc "$S/proc" 
+echo 'nameserver 8.8.8.8' > "$S/etc/resolv.conf"
+chroot "$S"
+umount "$S/dev" 
+umount "$S/sys" 
+umount "$S/proc"
+
+del() {
+    if [ -n "$S" ]; then
+        for mask in $2; do
+            echo "Removing $mask files in $1"
+            find "$S/$1" -name "$mask" -type f -delete 
+        done
+    else
+        echo "Prefix is empty"
+    fi
+}
+
+del '/' '*.deb .wh*'
+del '/var/log' '*old *.0 *.1 *.2 *.3 *.4 *.5 *.gz *.bz'
+
+find "$S" -name '*log' -type f -exec truncate -s 0 {} \;
+find "$S/var/log" -type f -exec truncate -s 0 {} \;
+find "$S/var/cache" -type f -delete
+find "$S/root" -name '.bash_history' -delete
+find "$S/home" -name '.bash_history' -delete
+find "$S/var/lib/apt/lists" -size +50 -delete
+rm -rf "$S/tmp/*"
+rm "$S/etc/resolv.conf"
+rm "$S/var/lib/aptitude/pkgstates.old"
+rm "$S/var/lib/dpkg/status-old"
+ls -1 squashfs-root/usr/share/locale | awk '$1!~/^(ru|en|locale)/ { print "rm -rf squashfs-root/usr/share/locale/"$1 }' | sh
+#ncdu "$S/"
